@@ -1,1 +1,1 @@
-web: bin/go-queue
+web: bin/main
