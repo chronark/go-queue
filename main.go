@@ -5,6 +5,8 @@ import (
 	"github.com/go-redis/redis/v8"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/logger"
+	"os"
+	"fmt"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"time"
 )
@@ -37,7 +39,11 @@ func ProduceHandler(c *fiber.Ctx, redisClient *redis.Client) error {
 }
 
 func main() {
-	redisOptions, err := redis.ParseURL("rediss://:da3d3c3719e34166a52ea4c92a29b441@eu1-funny-firefly-32822.upstash.io:32822")
+	fmt.Println("---")
+
+	fmt.Println(os.Getenv("REDIS_URL"))
+	fmt.Println("---")
+	redisOptions, err := redis.ParseURL(os.Getenv("REDIS_URL"))
 	if err != nil {
 		panic(err)
 	}
