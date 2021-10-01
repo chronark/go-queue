@@ -1,0 +1,11 @@
+version: "3.9"
+
+services:
+  
+  redis-commander:
+    image: rediscommander/redis-commander
+    environment:
+      REDIS_HOSTS: eu1-funny-firefly-32822.upstash.io:32822
+      REDIS_PASSWORD: da3d3c3719e34166a52ea4c92a29b441
+    ports:
+      - 8081:8081
