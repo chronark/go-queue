@@ -1,0 +1,5 @@
+services:
+  - type: web
+    name: api
+    env: docker
+    repo: https://github.com/chronark/go-queue

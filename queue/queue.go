@@ -4,7 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	redis "github.com/go-redis/redis/v8"
+	"github.com/chronark/go-queue/fauna"
+	f "github.com/fauna/faunadb-go/v4/faunadb"
 )
 
 const (
@@ -14,58 +15,80 @@ const (
 )
 
 type Queue struct {
-	redisClient *redis.Client
+	faunaClient *f.FaunaClient
 	ctx         context.Context
-	tenantId    string
 }
 
-func NewQueue(tenantId string, redisClient *redis.Client) (*Queue, error) {
+func NewQueue(faunaClient *f.FaunaClient) (*Queue, error) {
 
 	return &Queue{
-		redisClient: redisClient,
+		faunaClient: faunaClient,
 		ctx:         context.Background(),
-		tenantId:    tenantId,
 	}, nil
 }
 
-func (q *Queue) buildListKey(topic, status string) string {
-	return fmt.Sprintf("%s:%s:%s", q.tenantId, topic, status)
-}
-func (q *Queue) buildKey(topic, status, id string) string {
-	return fmt.Sprintf("%s:%s:%s:%s", q.tenantId, topic, status, id)
-}
+func (q *Queue) Produce(message Message) error {
 
-func (q *Queue) Produce(topic string, message SignedMessage) error {
-	serializedMessage, err := message.Serialize()
+	res, err := q.faunaClient.Query(f.Create(f.Collection(fauna.COLLECTION_TODO), f.Obj{"data": f.ToObject(message)}))
 	if err != nil {
-		return fmt.Errorf("Unable to serialize message: %w", err)
-	}
-
-	err = q.redisClient.Set(q.ctx, fmt.Sprintf("%s:active:%s", q.tenantId, message.Message.Header.Id), serializedMessage, -1).Err()
-	if err != nil {
+		fmt.Printf("%+v\n", err)
 		return err
 	}
+	fmt.Printf("%+v\n", res)
 
-	err = q.redisClient.LPush(q.ctx, q.buildListKey(topic, TODO), message.Message.Header.Id).Err()
-	if err != nil {
-		return fmt.Errorf("Unable to push message to queue: %w", err)
-	}
 	return nil
 }
 
-func (q *Queue) Consume(topic string) (string, error) {
-	messageId, err := q.redisClient.RPopLPush(q.ctx, q.buildListKey(topic, TODO), q.buildListKey(topic, IN_PROGRESS)).Result()
+func (q *Queue) Consume(topic string) (message Message, err error) {
+
+	res, err := q.faunaClient.Query(
+		f.Let().Bind(
+			"message",
+			f.Get(
+				f.MatchTerm(
+					f.Index(fauna.INDEX_TODO_BY_TOPIC),
+					topic,
+				),
+			),
+		).In(
+
+			f.Do(
+				f.Delete(f.Select("ref", f.Var("message"))),
+				f.Create(fauna.COLLECTION_IN_PROGRESS, f.Obj{"data": f.Select("data", f.Var("message"))}),
+			),
+		),
+	)
+
 	if err != nil {
-		return "", err
+		return Message{}, err
 	}
 
-	fmt.Println(messageId)
+	err = res.At(f.ObjKey("data")).Get(&message)
+	if err != nil {
+		return Message{}, err
+	}
 
-	return q.redisClient.Get(q.ctx, fmt.Sprintf("%s:active:%s", q.tenantId, messageId)).Result()
-
-	// return q.redisClient.RPopLPush(q.ctx, q.buildListKey(topic, TODO), q.buildListKey(topic, IN_PROGRESS)).Result()
+	return message, nil
 }
 
-// func (q *Queue) Acknowledge(tenant, topic string, messageId string) error {
-// 	return q.redisClient.LMove(q.ctx, q.buildListKey(topic, IN_PROGRESS), q.buildListKey(topic, DONE), "right", "right").Err()
-// }
+func (q *Queue) Acknowledge(messageId string) error {
+	_, err := q.faunaClient.Query(
+		f.Let().Bind(
+			"message",
+			f.Get(
+				f.MatchTerm(
+					f.Index(fauna.INDEX_IN_PROGRESS_BY_ID),
+					messageId,
+				),
+			),
+		).In(
+
+			f.Do(
+				f.Delete(f.Select("ref", f.Var("message"))),
+				f.Create(fauna.COLLECTION_DONE, f.Obj{"data": f.Select("data", f.Var("message"))}),
+			),
+		),
+	)
+
+	return err
+}

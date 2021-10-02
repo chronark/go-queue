@@ -2,95 +2,117 @@ package main
 
 import (
 	"fmt"
-	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/chronark/go-queue/queue"
-	"github.com/go-redis/redis/v8"
+	f "github.com/fauna/faunadb-go/v4/faunadb"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/google/uuid"
 )
 
-func ProduceHandler(c *fiber.Ctx, redisClient *redis.Client) error {
-	tenant := c.Params("tenant")
-	if tenant == "" {
-		return fiber.NewError(fiber.StatusBadRequest,"tenant is missing in url")
+func ProduceHandler(c *fiber.Ctx) error {
+
+	faunaToken := c.Get("Authorization")
+	if faunaToken == "" {
+		return fiber.NewError(fiber.StatusUnauthorized, "Authorization header is missing")
 	}
+
 	topic := c.Params("topic")
-	if tenant == "" {
-		return fiber.NewError(fiber.StatusBadRequest,"topic is missing in url")
-
+	if topic == "" {
+		return fiber.NewError(fiber.StatusBadRequest, "topic is missing in url")
 	}
-	message := c.Body()
+	payload := c.Body()
 
-	q, err := queue.NewQueue("tenant", redisClient)
+	q, err := queue.NewQueue(f.NewFaunaClient(faunaToken))
 	if err != nil {
-		return err
+		return fiber.NewError(fiber.StatusInternalServerError, fmt.Sprintf("Unable to connect to queue: %s", err.Error()))
 	}
 
-	messageId := uuid.NewString()
-
-	signedMessage := queue.SignedMessage{
-		Message: queue.Message{
-			Header: queue.Header{
-				Id:        messageId,
-				CreatedAt: time.Now(),
-			},
-			Body: message,
+	message := queue.Message{
+		Header: queue.Header{
+			Id:        uuid.NewString(),
+			Topic:     topic,
+			CreatedAt: time.Now(),
 		},
+		Payload: payload,
 	}
 
-	err = q.Produce(topic, signedMessage)
+	err = q.Produce(message)
 	if err != nil {
 		return err
 	}
 
-	return c.JSON(signedMessage)
+	return c.JSON(message)
 }
 
-func ConsumeHandler(c *fiber.Ctx, redisClient *redis.Client) error {
-	tenant := c.Params("tenant")
-	if tenant == "" {
-		return fiber.NewError(fiber.StatusBadRequest,"tenant is missing in url")
+func ConsumeHandler(c *fiber.Ctx) error {
+	faunaToken := c.Get("Authorization")
+	if faunaToken == "" {
+		return fiber.NewError(fiber.StatusUnauthorized, "Authorization header is missing")
 	}
 	topic := c.Params("topic")
-	if tenant == "" {
-		return fiber.NewError(fiber.StatusBadRequest,"topic is missing in url")
+	if topic == "" {
+		return fiber.NewError(fiber.StatusBadRequest, "topic is missing in url")
+	}
+	q, err := queue.NewQueue(f.NewFaunaClient(faunaToken))
+	if err != nil {
+		return err
+	}
+	message, err := q.Consume(topic)
+	if err != nil {
+		if strings.Contains(err.Error(), "Response error 404.") {
+			return c.SendStatus(fiber.StatusNotFound)
+		}
+		return err
 	}
 
-	q, err := queue.NewQueue("tenant", redisClient)
+	return c.JSON(message)
+
+}
+
+func AcknowledgeHandler(c *fiber.Ctx) error {
+	faunaToken := c.Get("Authorization")
+	if faunaToken == "" {
+		return fiber.NewError(fiber.StatusUnauthorized, "Authorization header is missing")
+	}
+	messageId := c.Params("messagId")
+	if messageId == "" {
+		return fiber.NewError(fiber.StatusBadRequest, "messageId is missing in url")
+	}
+	q, err := queue.NewQueue(f.NewFaunaClient(faunaToken))
 	if err != nil {
 		return err
 	}
 
-	message, err := q.Consume(topic)
+	err = q.Acknowledge(messageId)
 	if err != nil {
-		if err == redis.Nil {
-			return c.SendStatus(http.StatusNoContent)
+		if err != nil {
+			if strings.Contains(err.Error(), "Response error 404.") {
+				return c.SendStatus(fiber.StatusNotFound)
+			}
+			return err
 		}
 
 		return err
 	}
-	return c.SendString(message)
+	return c.SendStatus(fiber.StatusOK)
+
 }
 
 func main() {
-	redisClient := redis.NewClient(&redis.Options{
-		Addr:     os.Getenv("REDIS_ADDR"),
-		Password: "",
-		DB:       0,
-	})
 
 	app := fiber.New()
 	app.Use(logger.New())
 	app.Use(recover.New())
 
-	app.Post("/:tenant/produce/:topic", func(c *fiber.Ctx) error { return ProduceHandler(c, redisClient) })
-	app.Post("/:tenant/acknowledge/:messagId", func(c *fiber.Ctx) error { return ProduceHandler(c, redisClient) })
-	app.Get("/:tenant/consume/:topic", func(c *fiber.Ctx) error { return ConsumeHandler(c, redisClient) })
+	app.Post("/produce/:topic", ProduceHandler)
+	app.Post("/acknowledge/:messagId", AcknowledgeHandler)
+	app.Get("/consume/:topic", ConsumeHandler)
 
 	err := app.Listen(fmt.Sprintf(":%s", os.Getenv("PORT")))
 	if err != nil {

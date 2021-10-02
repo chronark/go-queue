@@ -1,0 +1,27 @@
+enum Status {
+  TODO
+  IN_PROGRESS
+  DONE
+}
+
+
+type Todo @collection(name: "todo") {
+  id: ID!
+  status: Status!
+}
+
+type InProgress @collection(name: "in_progress") {
+  id: ID!
+  status: Status!
+}
+
+type Done @collection(name: "done") {
+  id: ID!
+  status: Status!
+}
+
+
+type Query {
+    nextTodoByTopic: Todo @index(name: "todos_by_topic")
+    inProgressById: InProgress @index(name: "in_progress_by_id")
+}
