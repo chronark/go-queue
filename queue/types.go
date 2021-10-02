@@ -8,7 +8,6 @@ import (
 type Header struct {
 	Id         string    `json:"id"`
 	CreatedAt  time.Time `json:"createdAt"`
-	RetryAfter time.Time `json:"retryAfter"`
 }
 
 type Message struct {

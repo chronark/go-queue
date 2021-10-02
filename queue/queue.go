@@ -7,49 +7,65 @@ import (
 	redis "github.com/go-redis/redis/v8"
 )
 
+const (
+	TODO        = "todo"
+	IN_PROGRESS = "progress"
+	DONE        = "done"
+)
+
 type Queue struct {
-	queueDone     string
-	queueProgress string
-	queueTodo     string
-	redisClient   *redis.Client
-	ctx           context.Context
+	redisClient *redis.Client
+	ctx         context.Context
+	tenantId    string
 }
 
 func NewQueue(tenantId string, redisClient *redis.Client) (*Queue, error) {
-	
+
 	return &Queue{
-		queueDone:     fmt.Sprintf("%s:done", tenantId),
-		queueProgress: fmt.Sprintf("%s:inProgress", tenantId),
-		queueTodo:     fmt.Sprintf("%s:todo", tenantId),
-		redisClient:   redisClient,
-		ctx:           context.Background(),
+		redisClient: redisClient,
+		ctx:         context.Background(),
+		tenantId:    tenantId,
 	}, nil
 }
 
-func (q *Queue) Produce(key string, message SignedMessage) error {
+func (q *Queue) buildListKey(topic, status string) string {
+	return fmt.Sprintf("%s:%s:%s", q.tenantId, topic, status)
+}
+func (q *Queue) buildKey(topic, status, id string) string {
+	return fmt.Sprintf("%s:%s:%s:%s", q.tenantId, topic, status, id)
+}
+
+func (q *Queue) Produce(topic string, message SignedMessage) error {
 	serializedMessage, err := message.Serialize()
 	if err != nil {
 		return fmt.Errorf("Unable to serialize message: %w", err)
 	}
-	err = q.redisClient.LPush(q.ctx, fmt.Sprintf("%s:%s", q.queueTodo, key), serializedMessage).Err()
+
+	err = q.redisClient.Set(q.ctx, fmt.Sprintf("%s:active:%s", q.tenantId, message.Message.Header.Id), serializedMessage, -1).Err()
+	if err != nil {
+		return err
+	}
+
+	err = q.redisClient.LPush(q.ctx, q.buildListKey(topic, TODO), message.Message.Header.Id).Err()
 	if err != nil {
 		return fmt.Errorf("Unable to push message to queue: %w", err)
 	}
 	return nil
 }
 
-func (q *Queue) Consume(key string) (string, error) {
-	res := q.redisClient.RPopLPush(q.ctx, fmt.Sprintf("%s:%s", q.queueTodo, key), fmt.Sprintf("%s:%s", q.queueProgress, key))
-	if res.Err() != nil {
-		return "", res.Err()
+func (q *Queue) Consume(topic string) (string, error) {
+	messageId, err := q.redisClient.RPopLPush(q.ctx, q.buildListKey(topic, TODO), q.buildListKey(topic, IN_PROGRESS)).Result()
+	if err != nil {
+		return "", err
 	}
-	return res.Val(), nil
+
+	fmt.Println(messageId)
+
+	return q.redisClient.Get(q.ctx, fmt.Sprintf("%s:active:%s", q.tenantId, messageId)).Result()
+
+	// return q.redisClient.RPopLPush(q.ctx, q.buildListKey(topic, TODO), q.buildListKey(topic, IN_PROGRESS)).Result()
 }
 
-func (q *Queue) Acknowledge(key string) error {
-	res := q.redisClient.LMove(q.ctx, fmt.Sprintf("%s:%s", q.queueProgress, key), fmt.Sprintf("%s:%s", q.queueDone, key), "right", "right")
-	if res.Err() != nil {
-		return res.Err()
-	}
-	return nil
-}
+// func (q *Queue) Acknowledge(tenant, topic string, messageId string) error {
+// 	return q.redisClient.LMove(q.ctx, q.buildListKey(topic, IN_PROGRESS), q.buildListKey(topic, DONE), "right", "right").Err()
+// }

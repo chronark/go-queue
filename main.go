@@ -1,90 +1,99 @@
 package main
 
 import (
+	"fmt"
+	"net/http"
+	"os"
+	"time"
+
 	"github.com/chronark/go-queue/queue"
 	"github.com/go-redis/redis/v8"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/logger"
-	"os"
-	"fmt"
 	"github.com/gofiber/fiber/v2/middleware/recover"
-	"time"
+	"github.com/google/uuid"
 )
 
-
-
 func ProduceHandler(c *fiber.Ctx, redisClient *redis.Client) error {
+	tenant := c.Params("tenant")
+	if tenant == "" {
+		return fiber.NewError(fiber.StatusBadRequest,"tenant is missing in url")
+	}
+	topic := c.Params("topic")
+	if tenant == "" {
+		return fiber.NewError(fiber.StatusBadRequest,"topic is missing in url")
+
+	}
 	message := c.Body()
-	topic := c.Query("topic")
 
 	q, err := queue.NewQueue("tenant", redisClient)
 	if err != nil {
 		return err
 	}
 
-	err = q.Produce(topic, queue.SignedMessage{
+	messageId := uuid.NewString()
+
+	signedMessage := queue.SignedMessage{
 		Message: queue.Message{
 			Header: queue.Header{
-				Id:        "id",
+				Id:        messageId,
 				CreatedAt: time.Now(),
 			},
 			Body: message,
 		},
-	})
+	}
+
+	err = q.Produce(topic, signedMessage)
 	if err != nil {
 		return err
 	}
 
-	return c.Send(c.Body())
+	return c.JSON(signedMessage)
+}
+
+func ConsumeHandler(c *fiber.Ctx, redisClient *redis.Client) error {
+	tenant := c.Params("tenant")
+	if tenant == "" {
+		return fiber.NewError(fiber.StatusBadRequest,"tenant is missing in url")
+	}
+	topic := c.Params("topic")
+	if tenant == "" {
+		return fiber.NewError(fiber.StatusBadRequest,"topic is missing in url")
+	}
+
+	q, err := queue.NewQueue("tenant", redisClient)
+	if err != nil {
+		return err
+	}
+
+	message, err := q.Consume(topic)
+	if err != nil {
+		if err == redis.Nil {
+			return c.SendStatus(http.StatusNoContent)
+		}
+
+		return err
+	}
+	return c.SendString(message)
 }
 
 func main() {
-	fmt.Println("---")
-
-	fmt.Println(os.Getenv("REDIS_URL"))
-	fmt.Println("---")
-	redisOptions, err := redis.ParseURL(os.Getenv("REDIS_URL"))
-	if err != nil {
-		panic(err)
-	}
-	redisClient := redis.NewClient(redisOptions)
-
-	if err != nil {
-		panic(err)
-	}
-	// if false {
-
-	// 	err = q.Produce("topic", queue.SignedMessage{
-	// 		Message: queue.Message{
-	// 			Header: queue.Header{
-	// 				Id:        "id",
-	// 				CreatedAt: time.Now(),
-	// 			},
-	// 			Body: "xxxxxx World",
-	// 		},
-	// 	})
-	// 	if err != nil {
-	// 		panic(err)
-	// 	}
-	// }
-
-	// val, err := q.Consume("topic")
-	// if err != nil {
-	// 	panic(err)
-	// }
-
-	// m, err := queue.Deserialize(val)
-	// if err != nil {
-	// 	panic(err)
-	// }
-	// fmt.Printf("%+v\n", m)
+	redisClient := redis.NewClient(&redis.Options{
+		Addr:     os.Getenv("REDIS_ADDR"),
+		Password: "",
+		DB:       0,
+	})
 
 	app := fiber.New()
 	app.Use(logger.New())
 	app.Use(recover.New())
 
-	app.Post("/produce/:topic", func(c *fiber.Ctx) error { return ProduceHandler(c, redisClient) })
+	app.Post("/:tenant/produce/:topic", func(c *fiber.Ctx) error { return ProduceHandler(c, redisClient) })
+	app.Post("/:tenant/acknowledge/:messagId", func(c *fiber.Ctx) error { return ProduceHandler(c, redisClient) })
+	app.Get("/:tenant/consume/:topic", func(c *fiber.Ctx) error { return ConsumeHandler(c, redisClient) })
 
-	app.Listen(":9000")
-
+	err := app.Listen(fmt.Sprintf(":%s", os.Getenv("PORT")))
+	if err != nil {
+		panic(err)
+	}
 }
