@@ -29,12 +29,11 @@ func NewQueue(faunaClient *f.FaunaClient) (*Queue, error) {
 
 func (q *Queue) Produce(message Message) error {
 
-	res, err := q.faunaClient.Query(f.Create(f.Collection(fauna.COLLECTION_TODO), f.Obj{"data": f.ToObject(message)}))
+	_, err := q.faunaClient.Query(f.Create(f.Collection(fauna.COLLECTION_TODO), f.Obj{"data": f.ToObject(message)}))
 	if err != nil {
 		fmt.Printf("%+v\n", err)
 		return err
 	}
-	fmt.Printf("%+v\n", res)
 
 	return nil
 }

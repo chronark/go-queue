@@ -47,7 +47,7 @@ func ProduceHandler(c *fiber.Ctx) error {
 		return err
 	}
 
-	return c.JSON(message)
+	return c.JSON(message.Header)
 }
 
 func ConsumeHandler(c *fiber.Ctx) error {
