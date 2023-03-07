@@ -8,7 +8,5 @@ require (
 	github.com/fauna/faunadb-go/v4 v4.1.0
 	github.com/gofiber/fiber/v2 v2.19.0
 	github.com/google/uuid v1.3.0
-	golang.org/x/net v0.0.0-20210913180222-943fd674d43e // indirect
-	golang.org/x/sys v0.0.0-20210910150752-751e447fb3d0 // indirect
-	golang.org/x/text v0.3.7 // indirect
+	golang.org/x/net v0.7.0 // indirect
 )
